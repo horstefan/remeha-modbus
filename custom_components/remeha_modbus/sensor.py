@@ -3,7 +3,7 @@
 import logging
 from collections.abc import Callable
 from functools import cached_property
-from typing import cast, override
+from typing import Final, cast, override
 
 from aio_remeha_modbus.gtw08.climate_zone import ClimateZone
 from aio_remeha_modbus.gtw08.system_discovery_table import DeviceBoard, DeviceBoardType
@@ -26,6 +26,11 @@ from custom_components.remeha_modbus.const import (
     REMEHA_SENSORS,
 )
 from custom_components.remeha_modbus.coordinator import RemehaUpdateCoordinator
+from custom_components.remeha_modbus.register_entity import (
+    RemehaRegisterEntity,
+    register_definitions,
+)
+from custom_components.remeha_modbus.registers import RegisterDef
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -74,6 +79,15 @@ async def async_setup_entry(
                 native_value_func=lambda c: _get_dhw_zone(c).current_temparature,
             ),
         ]
+
+    entities += [
+        RemehaRegisterSensor(
+            coordinator=coordinator,
+            parent_device_id=mainboard.id if mainboard else None,
+            definition=definition,
+        )
+        for definition in register_definitions(lambda d: not d.writable and d.bits is None)
+    ]
 
     async_add_entities(entities)
 
@@ -193,3 +207,58 @@ class RemehaTemperatureSensorEntity(RemehaSensorEntity):
     @override
     def native_value(self):
         return self._native_value_func(self.coordinator)
+
+
+_UNIT_DEVICE_CLASSES: Final[dict[str, SensorDeviceClass]] = {
+    "°C": SensorDeviceClass.TEMPERATURE,
+    "bar": SensorDeviceClass.PRESSURE,
+    "kWh": SensorDeviceClass.ENERGY,
+    "kW": SensorDeviceClass.POWER,
+    "V": SensorDeviceClass.VOLTAGE,
+    "h": SensorDeviceClass.DURATION,
+    "min": SensorDeviceClass.DURATION,
+    "L/min": SensorDeviceClass.VOLUME_FLOW_RATE,
+}
+
+_COUNTER_UNITS: Final[frozenset[str]] = frozenset({"kWh", "h"})
+
+
+class RemehaRegisterSensor(RemehaRegisterEntity, SensorEntity):
+    """Read-only sensor that is backed by a register of the GTW-08 parameter list."""
+
+    def __init__(
+        self,
+        coordinator: RemehaUpdateCoordinator,
+        parent_device_id: int | None,
+        definition: RegisterDef,
+    ):
+        """Create a new register sensor."""
+
+        super().__init__(
+            coordinator=coordinator, parent_device_id=parent_device_id, definition=definition
+        )
+
+        if definition.enum is not None:
+            self._attr_device_class = SensorDeviceClass.ENUM
+            self._attr_options = list(definition.enum.values())
+            return
+
+        unit = definition.unit
+        self._attr_native_unit_of_measurement = unit
+        self._attr_device_class = _UNIT_DEVICE_CLASSES.get(unit) if unit else None
+
+        # Counters only ever increase, so long term statistics can be calculated from them.
+        if unit in _COUNTER_UNITS or "starts" in definition.name.lower():
+            self._attr_state_class = SensorStateClass.TOTAL_INCREASING
+        elif unit is not None:
+            self._attr_state_class = SensorStateClass.MEASUREMENT
+
+    @property
+    def native_value(self) -> float | int | str | None:
+        """Return the value of this sensor."""
+
+        value = self._raw_value
+        if value is None or self._definition.enum is None:
+            return value
+
+        return self._definition.enum.get(int(value))
