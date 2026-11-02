@@ -13,8 +13,14 @@ from homeassistant.helpers import entity_registry as er
 
 from custom_components.remeha_modbus.const import DOMAIN, REMEHA_SENSORS
 from custom_components.remeha_modbus.coordinator import RemehaUpdateCoordinator
+from custom_components.remeha_modbus.register_map import REGISTER_DEFINITIONS
 
 from .conftest import setup_platform
+
+# Sensors from the parameter list that are enabled by default, next to the REMEHA_SENSORS.
+ENABLED_REGISTER_SENSORS = len(
+    [d for d in REGISTER_DEFINITIONS if not d.writable and d.bits is None and d.enabled_by_default]
+)
 
 TANK_TEMPERATURE_TOP = "sensor.remeha_modbus_test_hub_dhw_tank_temperature_top"
 TANK_TEMPERATURE_BOTTOM = "sensor.remeha_modbus_test_hub_dhw_tank_temperature_bottom"
@@ -32,7 +38,10 @@ async def test_sensors(hass: HomeAssistant, remeha_api, mock_config_entry, remeh
         )
         await hass.async_block_till_done()
 
-        assert len(hass.states.async_all(domain_filter=SensorDomain)) == 35
+        assert (
+            len(hass.states.async_all(domain_filter=SensorDomain))
+            == len(REMEHA_SENSORS) + ENABLED_REGISTER_SENSORS
+        )
 
         for sd in REMEHA_SENSORS:
             assert isinstance(sd.name, str)
@@ -99,7 +108,10 @@ async def test_tank_temperature_sensors_not_added_without_mainboard_category(
         )
         await hass.async_block_till_done()
 
-        assert len(hass.states.async_all(domain_filter=SensorDomain)) == len(REMEHA_SENSORS)
+        assert (
+            len(hass.states.async_all(domain_filter=SensorDomain))
+            == len(REMEHA_SENSORS) + ENABLED_REGISTER_SENSORS
+        )
         assert hass.states.get(TANK_TEMPERATURE_TOP) is None
         assert hass.states.get(TANK_TEMPERATURE_BOTTOM) is None
 
@@ -124,7 +136,10 @@ async def test_tank_temperature_sensors(
         assert mainboard.board_category is not None
         assert mainboard.board_category.type is DeviceBoardType.CU_HW
 
-        assert len(hass.states.async_all(domain_filter=SensorDomain)) == len(REMEHA_SENSORS) + 2
+        assert (
+            len(hass.states.async_all(domain_filter=SensorDomain))
+            == len(REMEHA_SENSORS) + ENABLED_REGISTER_SENSORS + 2
+        )
 
         # Top: register 1120 (0x14dc), bottom: the DHW zone current temperature, register 1119 (0x14c8).
         for entity_id, expected in [(TANK_TEMPERATURE_TOP, 53.4), (TANK_TEMPERATURE_BOTTOM, 53.2)]:
