@@ -451,6 +451,9 @@
     },
     "update_failed_modbus_exception": {
       "message": "Failed to update due to modbus exception: {modbus_message}"
+    },
+    "register_write_out_of_range": {
+      "message": "The value is out of range for register {register}."
     }
   },
   "issues": {
