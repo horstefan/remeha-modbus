@@ -24,6 +24,11 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from custom_components.remeha_modbus.const import DOMAIN
 from custom_components.remeha_modbus.coordinator import RemehaUpdateCoordinator
 from custom_components.remeha_modbus.errors import RemehaModbusError
+from custom_components.remeha_modbus.register_entity import (
+    RemehaRegisterEntity,
+    register_definitions,
+)
+from custom_components.remeha_modbus.registers import RegisterDef
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -97,6 +102,13 @@ async def async_setup_entry(
                 set_current_option_func=api.appliance.async_set_digital_input_2_contact_logic,
             ),
         ]
+
+    entities += [
+        RemehaRegisterSelect(
+            coordinator=coordinator, parent_device_id=parent_device_id, definition=definition
+        )
+        for definition in register_definitions(lambda d: d.writable and d.enum is not None)
+    ]
 
     async_add_entities(entities)
 
@@ -183,4 +195,48 @@ class RemehaSelectEntity[E: Enum](CoordinatorEntity[RemehaUpdateCoordinator], Se
             and device_instance.hardware_version is not None
             and device_instance.software_version is not None
             else None
+        )
+
+
+class RemehaRegisterSelect(RemehaRegisterEntity, SelectEntity):
+    """Select entity that is backed by a writable enum register of the GTW-08 parameter list."""
+
+    def __init__(
+        self,
+        coordinator: RemehaUpdateCoordinator,
+        parent_device_id: int | None,
+        definition: RegisterDef,
+    ):
+        """Create a new register select."""
+
+        if definition.enum is None:
+            raise ValueError(f"Register {definition.register} is not an enum.")
+
+        super().__init__(
+            coordinator=coordinator, parent_device_id=parent_device_id, definition=definition
+        )
+
+        self._options_by_value = definition.enum
+        self._values_by_option = {option: value for value, option in definition.enum.items()}
+        self._attr_options = list(definition.enum.values())
+
+    @property
+    def current_option(self) -> str | None:
+        """Return the currently selected option."""
+
+        value = self._raw_value
+        return None if value is None else self._options_by_value.get(int(value))
+
+    async def async_select_option(self, option: str) -> None:
+        """Write the selected option to the appliance."""
+
+        if option not in self._values_by_option:
+            raise RemehaModbusError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_select_option",
+                translation_placeholders={"option": option},
+            )
+
+        await self.coordinator.async_write_register(
+            self._definition, self._values_by_option[option]
         )

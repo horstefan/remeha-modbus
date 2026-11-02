@@ -450,6 +450,9 @@
     },
     "update_failed_modbus_exception": {
       "message": "Data update mislukt: Modbus exception {modbus_message}"
+    },
+    "register_write_out_of_range": {
+      "message": "De waarde valt buiten het bereik van register {register}."
     }
   },
   "issues": {
