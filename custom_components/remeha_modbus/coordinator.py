@@ -754,7 +754,7 @@ class RemehaUpdateCoordinator(DataUpdateCoordinator):
         _LOGGER.debug("Schedule generated:\n\n%s\n\n, now pushing it to the appliance.", time_slots)
 
         try:
-            await dhw_zone.async_set_day_schedule(ClimateZone.__class__ and ClimateZoneScheduleId.SCHEDULE_1, day, time_slots)
+            await dhw_zone.async_set_day_schedule(ClimateZoneScheduleId.SCHEDULE_1, day, time_slots)
 
         except ModbusError as e:
             raise RemehaServiceError(
