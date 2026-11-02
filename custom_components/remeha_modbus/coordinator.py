@@ -13,6 +13,7 @@ from aio_remeha_modbus.gtw08.climate_zone import (
     ClimateZoneType,
 )
 from aio_remeha_modbus.gtw08.const import (
+    REMEHA_MAX_SPAN,
     BoilerConfiguration,
     BoilerEnergyLabel,
     ClimateZoneScheduleId,
@@ -72,6 +73,7 @@ from custom_components.remeha_modbus.errors import (
     RemehaServiceError,
 )
 from custom_components.remeha_modbus.helpers.entities import is_scheduler_switch
+from custom_components.remeha_modbus.registers import RegisterDef, decode_run, plan_reads
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -159,6 +161,9 @@ class RemehaUpdateCoordinator(DataUpdateCoordinator):
 
         self._schedule_subscribers: set[Subscriber[ScheduleUpdate]] = set()
 
+        # Registers that are polled on behalf of entities, see `async_subscribe_register`.
+        self._register_subscriptions: dict[int, tuple[RegisterDef, int]] = {}
+
     def _is_before_first_update(self) -> bool:
         return not self.data or "climates" not in self.data
 
@@ -171,6 +176,7 @@ class RemehaUpdateCoordinator(DataUpdateCoordinator):
         try:
             before_first_update = self._is_before_first_update()
             await self._api.async_update()
+            registers = await self._async_read_subscribed_registers()
             self._device_boards = {
                 board.id: board for board in self._api.discovery_table.device_boards
             }
@@ -245,6 +251,7 @@ class RemehaUpdateCoordinator(DataUpdateCoordinator):
             _LOGGER.debug("Ignoring ClimateZone(%s) because its type is NOT_PRESENT", zone.id)
 
         return {
+            "registers": registers,
             "appliance": self._api.appliance,
             "climates": {
                 zone.id: zone
@@ -404,6 +411,111 @@ class RemehaUpdateCoordinator(DataUpdateCoordinator):
         """Return all climate that match the given predicate."""
 
         return [climate for climate in self.data["climates"].values() if predicate(climate) is True]
+
+    def subscribe_register(self, definition: RegisterDef) -> UnsubscribeCallback:
+        """Poll the given register on every update, until the returned callback is called.
+
+        Only registers that are subscribed to are read from the appliance. Entities subscribe
+        when they are added to Home Assistant, so disabled entities do not cause any modbus traffic.
+
+        Args:
+            definition (RegisterDef): The register to poll.
+
+        Returns:
+            `UnsubscribeCallback`: A callback that ends this subscription.
+
+        """
+
+        _, count = self._register_subscriptions.get(definition.register, (definition, 0))
+        self._register_subscriptions[definition.register] = (definition, count + 1)
+
+        subscribed = True
+
+        @callback
+        def _unsubscribe() -> None:
+            nonlocal subscribed
+            if not subscribed:
+                return
+            subscribed = False
+
+            current, current_count = self._register_subscriptions[definition.register]
+            if current_count <= 1:
+                del self._register_subscriptions[definition.register]
+            else:
+                self._register_subscriptions[definition.register] = (current, current_count - 1)
+
+        return _unsubscribe
+
+    def get_register_value(self, register: int) -> float | None:
+        """Get the last value that was read from the given subscribed register.
+
+        Returns:
+            The scaled value (or the raw value for enums and bit fields), or `None` if the
+            register has not been read (yet) or the appliance reports no value.
+
+        """
+
+        if not self.data:
+            return None
+
+        return self.data.get("registers", {}).get(register)
+
+    async def _async_read_subscribed_registers(self) -> dict[int, float | None]:
+        """Read all subscribed registers, using as few modbus requests as possible."""
+
+        values: dict[int, float | None] = {}
+        if not self._register_subscriptions:
+            return values
+
+        unit = self._api.modbus_unit
+        definitions = [definition for definition, _ in self._register_subscriptions.values()]
+        for start, count, members in plan_reads(definitions, max_span=REMEHA_MAX_SPAN):
+            try:
+                words = await unit.read_holding_registers(address=start, count=count)
+                values |= decode_run(start, words, members)
+            except ModbusError as ex:
+                # Registers that are not supported by the appliance (or its software version)
+                # can make a whole request fail, so retry them one by one.
+                _LOGGER.debug("Reading registers %d-%d failed: %s", start, start + count - 1, ex)
+                for member in members:
+                    try:
+                        member_words = await unit.read_holding_registers(
+                            address=member.register, count=member.word_count
+                        )
+                        values[member.register] = member.decode(member_words)
+                    except ModbusError as member_ex:
+                        _LOGGER.debug(
+                            "Register %d is not available: %s", member.register, member_ex
+                        )
+                        values[member.register] = None
+
+        return values
+
+    async def async_write_register(self, definition: RegisterDef, value: float) -> None:
+        """Write a (scaled) value to a register and update the cached value.
+
+        Args:
+            definition (RegisterDef): The register to write.
+            value (float): The scaled value (or the raw value for enums).
+
+        Raises:
+            ValueError: if the value does not fit the register.
+            ModbusError: if a modbus error occurred while writing.
+
+        """
+
+        if not definition.writable:
+            raise ValueError(f"Register {definition.register} is read-only.")
+
+        await self._api.modbus_unit.write_registers(definition.register, definition.encode(value))
+
+        if self.data:
+            self.async_set_updated_data(
+                {
+                    **self.data,
+                    "registers": {**self.data.get("registers", {}), definition.register: value},
+                }
+            )
 
     def get_sensor_value(self, key: str) -> Any:
         """Get the current value of a sensor.
@@ -642,7 +754,7 @@ class RemehaUpdateCoordinator(DataUpdateCoordinator):
         _LOGGER.debug("Schedule generated:\n\n%s\n\n, now pushing it to the appliance.", time_slots)
 
         try:
-            await dhw_zone.async_set_day_schedule(ClimateZoneScheduleId.SCHEDULE_1, day, time_slots)
+            await dhw_zone.async_set_day_schedule(ClimateZone.__class__ and ClimateZoneScheduleId.SCHEDULE_1, day, time_slots)
 
         except ModbusError as e:
             raise RemehaServiceError(
