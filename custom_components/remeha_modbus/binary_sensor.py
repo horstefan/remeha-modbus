@@ -18,6 +18,11 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from custom_components.remeha_modbus.const import DOMAIN
 from custom_components.remeha_modbus.coordinator import RemehaUpdateCoordinator
+from custom_components.remeha_modbus.register_entity import (
+    RemehaRegisterEntity,
+    register_definitions,
+)
+from custom_components.remeha_modbus.registers import RegisterDef
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -73,6 +78,16 @@ async def async_setup_entry(
                     ),
                 )
                 for status in MonitoringStatus
+            ],
+            *[
+                RemehaRegisterBitSensor(
+                    coordinator=coordinator,
+                    parent_device_id=parent_device_id,
+                    definition=definition,
+                    bit=bit,
+                )
+                for definition in register_definitions(lambda d: d.bits is not None)
+                for bit in range(len(definition.bits or ()))
             ],
         ]
     )
@@ -153,3 +168,35 @@ class RemehaBinarySensorEntity(CoordinatorEntity[RemehaUpdateCoordinator], Binar
             and device_instance.software_version is not None
             else None
         )
+
+
+class RemehaRegisterBitSensor(RemehaRegisterEntity, BinarySensorEntity):
+    """Binary sensor for a single bit of a bit field register of the GTW-08 parameter list."""
+
+    def __init__(
+        self,
+        coordinator: RemehaUpdateCoordinator,
+        parent_device_id: int | None,
+        definition: RegisterDef,
+        bit: int,
+    ):
+        """Create a new bit sensor."""
+
+        if definition.bits is None:
+            raise ValueError(f"Register {definition.register} is not a bit field.")
+
+        super().__init__(
+            coordinator=coordinator, parent_device_id=parent_device_id, definition=definition
+        )
+
+        self._bit = bit
+        bit_name = definition.bits[bit]
+        self._attr_name = f"{definition.name} {bit_name.replace('_', ' ')}"
+        self._attr_unique_id = f"{DOMAIN}_{definition.unique_key}_bit{bit}"
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return whether the bit is set."""
+
+        value = self._raw_value
+        return None if value is None else bool(int(value) >> self._bit & 1)
