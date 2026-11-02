@@ -5,23 +5,32 @@
   <img alt="Remeha logo" src="./custom_components/remeha_modbus/brand/logo.png">
 </picture>
 
-![GitHub License](https://img.shields.io/github/license/houthacker/remeha-modbus)
-[![Hassfest](https://github.com/houthacker/remeha-modbus/actions/workflows/hassfest.yaml/badge.svg)](https://github.com/houthacker/remeha-modbus/actions/workflows/hassfest.yaml)
-[![Validate HACS](https://github.com/houthacker/remeha-modbus/actions/workflows/hacs.yaml/badge.svg)](https://github.com/houthacker/remeha-modbus/actions/workflows/hacs.yaml)
-[![pytest](https://github.com/houthacker/remeha-modbus/actions/workflows/pytest.yaml/badge.svg)](https://github.com/houthacker/remeha-modbus/actions/workflows/pytest.yaml)
-[![badge](https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/houthacker/ff0da84bf72a3d20fb68db8cb9d3e38e/raw/coverage_badge.json)](https://github.com/houthacker/remeha-modbus/actions/workflows/coverage.yaml)
-[![GitHub Release](https://img.shields.io/github/v/release/houthacker/remeha-modbus)](https://github.com/houthacker/remeha-modbus/releases/latest)
+![GitHub License](https://img.shields.io/github/license/horstefan/remeha-modbus)
+[![Hassfest](https://github.com/horstefan/remeha-modbus/actions/workflows/hassfest.yaml/badge.svg)](https://github.com/horstefan/remeha-modbus/actions/workflows/hassfest.yaml)
+[![Validate HACS](https://github.com/horstefan/remeha-modbus/actions/workflows/hacs.yaml/badge.svg)](https://github.com/horstefan/remeha-modbus/actions/workflows/hacs.yaml)
+[![pytest](https://github.com/horstefan/remeha-modbus/actions/workflows/pytest.yaml/badge.svg)](https://github.com/horstefan/remeha-modbus/actions/workflows/pytest.yaml)
+[![GitHub Release](https://img.shields.io/github/v/release/horstefan/remeha-modbus)](https://github.com/horstefan/remeha-modbus/releases/latest)
 [![Static Badge](https://img.shields.io/badge/donate-Buy_me_a_coffee-yellow?style=flat&logo=buymeacoffee&logoColor=000000&labelColor=ffdd00&color=green)]((https://buymeacoffee.com/houthacker))
 
 This integration allows you to manage your Remeha heating/cooling appliance locally from Home Assistant.
 
+> [!NOTE]
+> **This is a fork** of [houthacker/remeha-modbus](https://github.com/houthacker/remeha-modbus), maintained by
+> [@horstefan](https://github.com/horstefan). All credit for the original integration goes to
+> [houthacker](https://github.com/houthacker) and its contributors.
+>
+> **AI disclosure:** the additions described in [GTW-08 parameter list registers](#gtw-08-parameter-list-registers)
+> were written by an AI assistant (Abacus.AI CoWork) at the request of the fork maintainer. They have been tested
+> with the automated test suite only, **not on real GTW-08 hardware**. Use the writable entities with care.
+
 ### Like this integration?
 
-Star remeha-modbus [on github  &#x2B50;](https://github.com/houthacker/remeha-modbus)
+Star remeha-modbus [on github  &#x2B50;](https://github.com/horstefan/remeha-modbus)
 
 ## Table of Contents
 - [Installation](#installation)
 - [Current features](#current-features)
+  - [GTW-08 parameter list registers](#gtw-08-parameter-list-registers)
   - [Modbus Discovery Table](#modbus-discovery-table)
 - [DHW Auto Scheduling](#dhw-auto-scheduling)
 - [DHW Schedule Synchronization](#dhw-schedule-synchronization)
@@ -34,7 +43,7 @@ Star remeha-modbus [on github  &#x2B50;](https://github.com/houthacker/remeha-mo
 
 To install this integration, you need to have [HACS](https://hacs.xyz/docs/use) installed in your Home Assistant.
 
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=houthacker&repository=remeha-modbus&category=integration)
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=horstefan&repository=remeha-modbus&category=integration)
 
 ## Current features
 
@@ -53,6 +62,32 @@ Planned features and features under discussion are available in the [issues](htt
   - This integration exposes a service called `dhw_auto_schedule` that can be used in automations or scripts. A detailed explanation follows [below](#dhw-auto-scheduling).
 - Time schedule editing:
   If you install the [scheduler](https://github.com/nielsfaber/scheduler-card) integration, you can edit your DHW schedules from Home Assistant after [enabling it](#switchenable_schedule_sync). Description is located [here](#dhw-schedule-synchronization).
+
+### GTW-08 parameter list registers
+
+This fork exposes registers from the *GTW-08 Modbus parameter list* as additional entities. This part was written by an AI
+(Abacus.AI CoWork); see the note at the top of this page.
+
+**What was changed**
+- A generic register layer (`registers.py`) that decodes and encodes UINT8/INT8/UINT16/INT16/UINT32 values, including scale factors,
+  enums and bit fields. It reads registers directly over modbus, independent of the `aio-remeha-modbus` library.
+- A generated register map (`register_map.py`) with 142 registers from the sheets *Boiler (Appliance)*, *Service*,
+  *MainControlMonitoring*, *Hybrid*, *Thermodynamic Water Heater* and *BMS*.
+- New entities: `sensor` for read-only registers, `binary_sensor` per bit of bit-field registers, `number` for writable numeric
+  registers and `select` for writable enum registers.
+- The coordinator only polls registers of entities that are enabled in Home Assistant, using as few modbus requests as possible.
+  Writing a register updates the entity immediately.
+- Translations (en/nl) for the write-out-of-range error and new tests (`test_registers.py`, `test_register_entities.py`).
+
+**Things to know**
+- Only a small set of read-only sensors is enabled by default. All other entities, including every writable one, are
+  disabled by default and can be enabled in the entity registry.
+- Writable registers (for example the remote heat demand registers 256-260) can influence your installation. Only enable them
+  if you know what you are doing.
+- The 32-bit word order (high word first) is derived from the library and not verified on hardware. Units and scale factors
+  are partly inferred from the Excel sheet.
+- Enum options are shown as technical names, without translations.
+- OCTETSTRING registers and the sheets Cascade, Solar, Buffer, Zones and Discovery are not included.
 
 ### Modbus discovery table
 
