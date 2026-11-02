@@ -8,7 +8,7 @@ from aio_remeha_modbus.gtw08 import GTW08
 from aio_remeha_modbus.gtw08.climate_zone import ClimateZone
 from aio_remeha_modbus.gtw08.const import Limits
 from aio_remeha_modbus.gtw08.system_discovery_table import DeviceBoard
-from homeassistant.components.number import NumberDeviceClass, NumberEntity
+from homeassistant.components.number import NumberDeviceClass, NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -20,6 +20,12 @@ from custom_components.remeha_modbus.const import (
     TEMPERATURE_STEP,
 )
 from custom_components.remeha_modbus.coordinator import RemehaUpdateCoordinator
+from custom_components.remeha_modbus.errors import RemehaModbusError
+from custom_components.remeha_modbus.register_entity import (
+    RemehaRegisterEntity,
+    register_definitions,
+)
+from custom_components.remeha_modbus.registers import RegisterDef
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -56,6 +62,15 @@ async def async_setup_entry(
         )
     else:
         _LOGGER.debug("No DHW climates found so not adding any DhwHysteresis entities.")
+
+    entities.extend(
+        RemehaRegisterNumber(
+            coordinator=coordinator,
+            parent_device_id=mainboards[0].id if mainboards else None,
+            definition=definition,
+        )
+        for definition in register_definitions(lambda d: d.writable and d.enum is None)
+    )
 
     async_add_entities(entities)
 
@@ -268,3 +283,46 @@ class RemehaNeutralBandNumber(CoordinatorEntity[RemehaUpdateCoordinator], Number
             and device_instance.software_version is not None
             else None
         )
+
+
+class RemehaRegisterNumber(RemehaRegisterEntity, NumberEntity):
+    """Number entity that is backed by a writable register of the GTW-08 parameter list."""
+
+    _attr_mode = NumberMode.BOX
+
+    def __init__(
+        self,
+        coordinator: RemehaUpdateCoordinator,
+        parent_device_id: int | None,
+        definition: RegisterDef,
+    ):
+        """Create a new register number."""
+
+        super().__init__(
+            coordinator=coordinator, parent_device_id=parent_device_id, definition=definition
+        )
+
+        self._attr_native_min_value = definition.native_min
+        self._attr_native_max_value = definition.native_max
+        self._attr_native_step = definition.native_step
+        self._attr_native_unit_of_measurement = definition.unit
+        if definition.unit == "°C":
+            self._attr_device_class = NumberDeviceClass.TEMPERATURE
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the current value."""
+
+        return self._raw_value
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Write the value to the appliance."""
+
+        try:
+            await self.coordinator.async_write_register(self._definition, value)
+        except ValueError as ex:
+            raise RemehaModbusError(
+                translation_domain=DOMAIN,
+                translation_key="register_write_out_of_range",
+                translation_placeholders={"register": str(self._definition.register)},
+            ) from ex
